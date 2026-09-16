@@ -46,7 +46,7 @@ shutil.copytree(build / 'war3-sd-card/switch/wine', stage,
 # d3dx9_26, with the scripts\NFS_XtendedInput.asi its ASI loader loads, which
 # adds msvcp140, which loads concrt140 when it starts. quartz delay-loads ddraw
 # too. Their imports, and the DLLs that exports they use forward to, come along.
-NFS_DLLS = 'ddraw dinput8 netapi32 shfolder tapi32 dbghelp vcruntime140 msvcp140 concrt140 xinput1_4 d3dx9_26'.split()
+NFS_DLLS = 'ddraw dinput dinput8 netapi32 shfolder tapi32 dbghelp vcruntime140 msvcp140 concrt140 xinput1_4 d3dx9_26'.split()
 # Fallout New Vegas (GOG) imports xinput1_3 and d3dx9_38, and its Galaxy.dll and
 # GalaxyWrp.dll import the 2012 runtimes. d3dx9 loads images through
 # windowscodecs, which it delay-imports, so no import walk reaches it.

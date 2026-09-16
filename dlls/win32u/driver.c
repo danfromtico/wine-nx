@@ -683,6 +683,11 @@ static BOOL nulldrv_SetIMECompositionRect( HWND hwnd, RECT rect )
     return FALSE;
 }
 
+static BOOL nulldrv_ShowSoftwareKeyboard( HWND hwnd )
+{
+    return FALSE;
+}
+
 static LRESULT nulldrv_DesktopWindowProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
     return default_window_proc( hwnd, msg, wparam, lparam, FALSE );
@@ -1028,6 +1033,7 @@ static void load_display_driver(void)
             extern BOOL wine_nx_drv_ProcessEvents( DWORD );
             extern BOOL wine_nx_drv_SetCursorPos( INT, INT );
             extern void wine_nx_drv_SetCursor( HWND, HCURSOR );
+            extern BOOL wine_nx_drv_ShowSoftwareKeyboard( HWND );
             extern UINT wine_nx_drv_UpdateDisplayDevices( const struct gdi_device_manager *, void * );
             extern UINT wine_nx_drv_OpenGLInit( UINT, const struct opengl_funcs *, const struct opengl_driver_funcs ** );
 #ifdef WINE_NX_MESA_SWITCH
@@ -1040,6 +1046,7 @@ static void load_display_driver(void)
             null_user_driver.pProcessEvents        = wine_nx_drv_ProcessEvents;
             null_user_driver.pSetCursorPos         = wine_nx_drv_SetCursorPos;
             null_user_driver.pSetCursor            = wine_nx_drv_SetCursor;
+            null_user_driver.pShowSoftwareKeyboard = wine_nx_drv_ShowSoftwareKeyboard;
             null_user_driver.pOpenGLInit           = wine_nx_drv_OpenGLInit;
 #ifdef WINE_NX_MESA_SWITCH
             /* mesa-switch's NVK, presenting through VK_NN_vi_surface (winnx_vulkan.c) */
@@ -1156,6 +1163,11 @@ static void loaderdrv_NotifyIMEStatus( HWND hwnd, UINT status )
 static BOOL loaderdrv_SetIMECompositionRect( HWND hwnd, RECT rect )
 {
     return load_driver()->pSetIMECompositionRect( hwnd, rect );
+}
+
+static BOOL loaderdrv_ShowSoftwareKeyboard( HWND hwnd )
+{
+    return load_driver()->pShowSoftwareKeyboard( hwnd );
 }
 
 static LONG loaderdrv_ChangeDisplaySettings( LPDEVMODEW displays, LPCWSTR primary_name, HWND hwnd,
@@ -1319,6 +1331,7 @@ static const struct user_driver_funcs lazy_load_driver =
     loaderdrv_ImeProcessKey,
     loaderdrv_NotifyIMEStatus,
     loaderdrv_SetIMECompositionRect,
+    loaderdrv_ShowSoftwareKeyboard,
     /* cursor/icon functions */
     nulldrv_DestroyCursorIcon,
     loaderdrv_SetCursor,
@@ -1428,6 +1441,7 @@ void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version
     SET_USER_FUNC(ImeProcessKey);
     SET_USER_FUNC(NotifyIMEStatus);
     SET_USER_FUNC(SetIMECompositionRect);
+    SET_USER_FUNC(ShowSoftwareKeyboard);
     SET_USER_FUNC(DestroyCursorIcon);
     SET_USER_FUNC(SetCursor);
     SET_USER_FUNC(GetCursorPos);

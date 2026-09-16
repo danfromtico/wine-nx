@@ -134,6 +134,17 @@ static void nxdrv_trace_hot( const char *fmt, int a, int b, int c, int d )
     nxdrv_trace( fmt, a, b, c, d );
 }
 
+/* Rare, user-triggered events (the on-screen keyboard opening or failing to)
+ * are worth keeping in the log even with Verbose traces off, unlike the
+ * per-frame lines nxdrv_trace gates on it. */
+static void nxdrv_trace_always( const char *fmt, int a, int b, int c, int d )
+{
+    char buf[160];
+    if (!&wine_nx_runtime_trace) return;
+    snprintf( buf, sizeof(buf), fmt, a, b, c, d );
+    wine_nx_runtime_trace( buf );
+}
+
 /* get_dib_stride / get_dib_image_size come from the win32u private headers. */
 
 static void trace_surface_samples( const BITMAPINFO *color_info, const void *color_bits )
@@ -634,6 +645,45 @@ static void wine_nx_send_mouse( int x, int y, DWORD flags )
     NtUserSendHardwareInput( 0, 0, &input, 0 );
 }
 
+/* Minus + right stick click force the on-screen keyboard open regardless of
+ * focus, for programs is_text_entry_window (input.c) never recognises as a
+ * text control, or with no-swkbd-auto.txt turning the automatic trigger off.
+ * Read from wine_nx_swkbd_hotkey_state, not wine_nx_pad_key_state: the latter
+ * is zeroed while a program reads the controller through XInput (runtime.c),
+ * which this system-level shortcut must keep working through regardless. */
+extern const unsigned int wine_nx_pad_key_minus_bit __attribute__((weak));
+extern const unsigned int wine_nx_pad_key_stickr_bit __attribute__((weak));
+extern unsigned int wine_nx_swkbd_hotkey_state __attribute__((weak));
+
+/* 0 = idle, 1 = combo held (or the keyboard is up because of it). More than
+ * one thread can reach here through ProcessEvents at once (a loading screen
+ * and the main render loop, for instance), so this is a lock, not a plain
+ * bool: only the thread whose compare-exchange takes it from 0 to 1 opens
+ * the keyboard, and it does not open again until the combo is released. */
+static unsigned int wine_nx_swkbd_hotkey_held;
+
+static void wine_nx_swkbd_hotkey(void)
+{
+    unsigned int keys, combo, expected;
+    BOOL opened;
+
+    if (!&wine_nx_pad_key_minus_bit || !&wine_nx_swkbd_hotkey_state) return;
+    combo = wine_nx_pad_key_minus_bit | wine_nx_pad_key_stickr_bit;
+    keys = __atomic_load_n( &wine_nx_swkbd_hotkey_state, __ATOMIC_RELAXED );
+    if ((keys & combo) != combo)
+    {
+        __atomic_store_n( &wine_nx_swkbd_hotkey_held, 0, __ATOMIC_RELEASE );
+        return;
+    }
+    expected = 0;
+    if (!__atomic_compare_exchange_n( &wine_nx_swkbd_hotkey_held, &expected, 1, FALSE,
+                                      __ATOMIC_ACQ_REL, __ATOMIC_RELAXED ))
+        return;  /* already open, or another thread just won the race to open it */
+    nxdrv_trace_always( "[NXDRV] swkbd hotkey: keys=%#x combo=%#x", keys, combo, 0, 0 );
+    opened = NtUserShowSoftwareKeyboard( 0 );
+    nxdrv_trace_always( "[NXDRV] swkbd hotkey opened=%d", opened, 0, 0, 0 );
+}
+
 /* Whether to draw the arrow, from the cursor the program set and its show
  * count. Until a program sets a cursor there is none and the arrow is shown; a
  * program that later sets none, over a cursor it draws itself, hides it, and
@@ -685,6 +735,7 @@ BOOL wine_nx_drv_ProcessEvents( DWORD mask )
     else if (moved) nxdrv_trace_hot( "[NXINPUT] move x=%d y=%d buttons=%x", x, y, buttons, 0 );
     last_buttons = buttons;
     keys = wine_nx_send_keys();
+    wine_nx_swkbd_hotkey();
     wine_nx_update_cursor();
     wine_nx_fb_present();
     return moved || first || keys;
@@ -700,6 +751,128 @@ void wine_nx_drv_SetCursor( HWND hwnd, HCURSOR cursor )
     (void)hwnd;
     (void)cursor;
     wine_nx_update_cursor();
+}
+
+/* Opens Horizon's on-screen keyboard, in the runtime (wine_nx_show_keyboard,
+ * wine-nx-probe/source/runtime.c: swkbdShow, blocking this guest thread). */
+extern int wine_nx_show_keyboard( const char *header, const char *initial, char *out, size_t out_size );
+
+/* Minimal UTF-8 to UTF-16 decoder for swkbd's output, which libnx gives as
+ * UTF-8. Malformed input becomes U+FFFD rather than stopping the conversion;
+ * out_count is in WCHARs, including room left for the terminating 0. */
+static int wine_nx_utf8_to_utf16( const char *utf8, WCHAR *out, int out_count )
+{
+    const unsigned char *p = (const unsigned char *)utf8;
+    int n = 0;
+
+    while (*p && n + 1 < out_count)
+    {
+        unsigned int cp;
+        int extra;
+
+        if (*p < 0x80) { cp = *p++; extra = 0; }
+        else if ((*p & 0xe0) == 0xc0) { cp = *p++ & 0x1f; extra = 1; }
+        else if ((*p & 0xf0) == 0xe0) { cp = *p++ & 0x0f; extra = 2; }
+        else if ((*p & 0xf8) == 0xf0) { cp = *p++ & 0x07; extra = 3; }
+        else { p++; out[n++] = 0xfffd; continue; }
+
+        while (extra-- && (*p & 0xc0) == 0x80) cp = (cp << 6) | (*p++ & 0x3f);
+
+        if (cp >= 0x10000 && n + 2 < out_count)
+        {
+            cp -= 0x10000;
+            out[n++] = 0xd800 + (cp >> 10);
+            out[n++] = 0xdc00 + (cp & 0x3ff);
+        }
+        else out[n++] = (WCHAR)cp;
+    }
+    out[n] = 0;
+    return n;
+}
+
+/* One key, down then up, with a real scan code the way wine_nx_send_keys
+ * derives it - so DirectInput's keyboard state buffer and GetAsyncKeyState
+ * see it, not only whatever WM_CHAR a message loop's TranslateMessage makes
+ * of it. */
+static void wine_nx_send_vk( HKL layout, BYTE vk, BOOL up )
+{
+    INPUT input = {0};
+    UINT scan = NtUserMapVirtualKeyEx( vk, MAPVK_VK_TO_VSC_EX, layout );
+
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    input.ki.wScan = scan & 0xff;
+    input.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+    if ((scan & 0xff00) == 0xe000) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    NtUserSendHardwareInput( 0, 0, &input, 0 );
+}
+
+/* A character with no key on the current layout (most of Unicode) has no
+ * scan code to send; KEYEVENTF_UNICODE at least reaches a WM_CHAR handler,
+ * though not GetAsyncKeyState or DirectInput's keyboard buffer, same as
+ * real Windows: typing such a character with a real keyboard is no
+ * different. */
+static void wine_nx_send_unicode_char( WCHAR ch )
+{
+    INPUT input = {0};
+
+    input.type = INPUT_KEYBOARD;
+    input.ki.wScan = ch;
+    input.ki.dwFlags = KEYEVENTF_UNICODE;
+    NtUserSendHardwareInput( 0, 0, &input, 0 );
+    input.ki.dwFlags |= KEYEVENTF_KEYUP;
+    NtUserSendHardwareInput( 0, 0, &input, 0 );
+}
+
+/**********************************************************************
+ *           wine_nx_drv_ShowSoftwareKeyboard
+ *
+ * Delivered to whichever window has focus when the player accepts what they
+ * typed, the same way wine_nx_send_keys delivers the controller's remapped
+ * keys - hwnd only picked the automatic trigger's target class (input.c),
+ * not where the text goes, so it is unused here.
+ */
+BOOL wine_nx_drv_ShowSoftwareKeyboard( HWND hwnd )
+{
+    char utf8[512];
+    WCHAR utf16[512];
+    HKL layout;
+    int i, len;
+
+    (void)hwnd;
+    nxdrv_trace_always( "[NXDRV] ShowSoftwareKeyboard enter", 0, 0, 0, 0 );
+    if (!wine_nx_show_keyboard( "Enter text", "", utf8, sizeof(utf8) ))
+    {
+        nxdrv_trace_always( "[NXDRV] ShowSoftwareKeyboard: swkbdShow failed or was cancelled", 0, 0, 0, 0 );
+        return FALSE;
+    }
+    len = wine_nx_utf8_to_utf16( utf8, utf16, ARRAY_SIZE(utf16) );
+    layout = NtUserGetKeyboardLayout( 0 );
+    for (i = 0; i < len; i++)
+    {
+        WORD scan = NtUserVkKeyScanEx( utf16[i], layout );
+        BYTE vk = LOBYTE( scan ), state = HIBYTE( scan );
+
+        if (scan == 0xffff) { wine_nx_send_unicode_char( utf16[i] ); continue; }
+        if (state & 1) wine_nx_send_vk( layout, VK_SHIFT, FALSE );
+        if (state & 2) wine_nx_send_vk( layout, VK_CONTROL, FALSE );
+        if (state & 4) wine_nx_send_vk( layout, VK_MENU, FALSE );
+        wine_nx_send_vk( layout, vk, FALSE );
+        wine_nx_send_vk( layout, vk, TRUE );
+        if (state & 4) wine_nx_send_vk( layout, VK_MENU, TRUE );
+        if (state & 2) wine_nx_send_vk( layout, VK_CONTROL, TRUE );
+        if (state & 1) wine_nx_send_vk( layout, VK_SHIFT, TRUE );
+    }
+    /* Accepting the on-screen keyboard is the player confirming that text,
+     * the way Enter confirms a line typed on a real keyboard: without it, a
+     * field built to end editing on Enter (most of them, for a game with no
+     * on-screen "done" button of its own) never leaves edit mode and the
+     * program never sees a completed entry, even though it saw every
+     * character. */
+    wine_nx_send_vk( layout, VK_RETURN, FALSE );
+    wine_nx_send_vk( layout, VK_RETURN, TRUE );
+    nxdrv_trace_always( "[NXDRV] ShowSoftwareKeyboard chars=%d", len, 0, 0, 0 );
+    return TRUE;
 }
 
 /**********************************************************************

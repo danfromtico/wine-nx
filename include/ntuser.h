@@ -1429,6 +1429,7 @@ enum
     NtUserCallHwndParam_ExposeWindowSurface,
     NtUserCallHwndParam_GetWinMonitorDpi,
     NtUserCallHwndParam_SetRawWindowPos,
+    NtUserCallHwndParam_ShowSoftwareKeyboard,
 };
 
 struct get_window_rects_params
@@ -1639,6 +1640,16 @@ static inline BOOL NtUserExposeWindowSurface( HWND hwnd, UINT flags, const RECT 
     struct expose_window_surface_params params = {.flags = flags, .whole = !rect, .dpi = dpi};
     if (rect) params.rect = *rect;
     return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, NtUserCallHwndParam_ExposeWindowSurface );
+}
+
+/* On platforms with no physical keyboard (the Switch display driver), opens
+ * an on-screen keyboard for hwnd and, once the player accepts what they
+ * typed, delivers it as WM_KEYDOWN/WM_CHAR the same way SendInput's
+ * KEYEVENTF_UNICODE does. Returns FALSE if the platform has no such
+ * keyboard, or the player cancelled it. */
+static inline BOOL NtUserShowSoftwareKeyboard( HWND hwnd )
+{
+    return NtUserCallHwndParam( hwnd, 0, NtUserCallHwndParam_ShowSoftwareKeyboard );
 }
 
 static inline UINT NtUserGetWinMonitorDpi( HWND hwnd, MONITOR_DPI_TYPE type )

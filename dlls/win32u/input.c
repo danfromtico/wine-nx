@@ -1961,6 +1961,34 @@ BOOL WINAPI NtUserReleaseCapture(void)
     return set_capture_window( 0, 0, &previous );
 }
 
+/* Whether the platform opens an on-screen keyboard by itself on focus, unless
+ * no-swkbd-auto.txt turns that off (wine-nx-probe/source/runtime.c); absent
+ * (weak) on platforms with no such driver hook, and where user_driver's
+ * pShowSoftwareKeyboard is the harmless nulldrv stub. */
+extern int wine_nx_swkbd_auto_enabled __attribute__((weak));
+
+/* Whether hwnd looks like a text-entry control worth popping the on-screen
+ * keyboard for: Edit and its variants (RichEdit20W, RichEdit50W, ...) all
+ * carry "edit" in their class name, as does a combo box's hidden child. */
+static BOOL is_text_entry_window( HWND hwnd )
+{
+    static const WCHAR editW[] = {'e','d','i','t'};
+    WCHAR buffer[64];
+    UNICODE_STRING name = {.Buffer = buffer, .MaximumLength = sizeof(buffer)};
+    INT i, len = NtUserGetClassName( hwnd, TRUE, &name );
+
+    for (i = 0; i + ARRAY_SIZE(editW) <= (unsigned int)len; i++)
+        if (!wcsnicmp( buffer + i, editW, ARRAY_SIZE(editW) )) return TRUE;
+    return FALSE;
+}
+
+static void maybe_show_software_keyboard( HWND hwnd )
+{
+    if (!(&wine_nx_swkbd_auto_enabled) || !wine_nx_swkbd_auto_enabled) return;
+    if (!is_text_entry_window( hwnd )) return;
+    NtUserShowSoftwareKeyboard( hwnd );
+}
+
 /*****************************************************************
  *		set_focus_window
  *
@@ -2005,6 +2033,7 @@ static HWND set_focus_window( HWND hwnd, BOOL from_active )
             NtUserNotifyWinEvent( EVENT_OBJECT_FOCUS, hwnd, OBJID_CLIENT, 0 );
 
         send_message( hwnd, WM_SETFOCUS, (WPARAM)previous, 0 );
+        maybe_show_software_keyboard( hwnd );
     }
     return previous;
 }

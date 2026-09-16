@@ -382,6 +382,8 @@ struct user_driver_funcs
     UINT    (*pImeProcessKey)(HIMC,UINT,UINT,const BYTE*);
     void    (*pNotifyIMEStatus)(HWND,UINT);
     BOOL    (*pSetIMECompositionRect)(HWND,RECT);
+    /* on-screen keyboard, for platforms with no physical keyboard */
+    BOOL    (*pShowSoftwareKeyboard)(HWND);
     /* cursor/icon functions */
     void    (*pDestroyCursorIcon)(HCURSOR);
     void    (*pSetCursor)(HWND,HCURSOR);

@@ -17,6 +17,7 @@ struct wine_nx_launcher_options
     int verbose;
     int profile;
     int framebuffer;
+    int swkbd_auto;             /* no-swkbd-auto.txt: the on-screen keyboard opens on focus */
 };
 
 /* Show the launcher. Returns 1 with the chosen program's path in target, or 0

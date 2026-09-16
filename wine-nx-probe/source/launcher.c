@@ -1114,8 +1114,8 @@ static int program_menu( struct launcher *l, struct program *p, char *target, si
 
 enum settings_row
 {
-    SET_THEME, SET_ANIMATIONS, SET_COLUMNS, SET_ROWS, SET_HIDDEN, SET_VERBOSE, SET_PROFILE, SET_WINDOWS, SET_VERSION,
-    SET_CREDITS, SETTINGS_ROWS
+    SET_THEME, SET_ANIMATIONS, SET_COLUMNS, SET_ROWS, SET_HIDDEN, SET_VERBOSE, SET_PROFILE, SET_WINDOWS, SET_SWKBD,
+    SET_VERSION, SET_CREDITS, SETTINGS_ROWS
 };
 
 static void save_look( struct launcher *l )
@@ -1247,6 +1247,10 @@ static void settings_menu( struct launcher *l )
                   l->options->framebuffer ? "Framebuffer" : "Compositor" );
         rows[SET_WINDOWS].help = "framebuffer.txt: the framebuffer copies window pixels straight to the screen, "
                                  "for when the OpenGL compositor misbehaves.";
+        snprintf( rows[SET_SWKBD].label, sizeof(rows[0].label), "On-screen keyboard" );
+        snprintf( rows[SET_SWKBD].value, sizeof(rows[0].value), "%s", on_off[!!l->options->swkbd_auto] );
+        rows[SET_SWKBD].help = "no-swkbd-auto.txt: opens by itself when a text field gets focus. Off leaves it to "
+                                "Minus + the right stick click, or a program asking for it directly.";
         snprintf( rows[SET_VERSION].label, sizeof(rows[0].label), "Runtime" );
         snprintf( rows[SET_VERSION].value, sizeof(rows[0].value), "%s", l->options->build );
         rows[SET_VERSION].disabled = 1;
@@ -1282,6 +1286,11 @@ static void settings_menu( struct launcher *l )
             l->options->framebuffer = !l->options->framebuffer;
             runtime_file( l, "framebuffer.txt", path, sizeof(path) );
             write_line( path, l->options->framebuffer ? "1" : "0" );
+            break;
+        case SET_SWKBD:
+            l->options->swkbd_auto = !l->options->swkbd_auto;
+            runtime_file( l, "no-swkbd-auto.txt", path, sizeof(path) );
+            write_line( path, l->options->swkbd_auto ? "0" : "1" );
             break;
         case SET_CREDITS:
             credits_screen( l );
